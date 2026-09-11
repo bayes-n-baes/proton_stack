@@ -111,6 +111,14 @@ class ImageFileUtils(BaseFileUtils):
     ) -> Any:
         raise NotImplementedError
     
+    @override
+    def get_checksum(
+        self,
+        *args,
+        **kwargs,
+    ) -> Any:
+        raise NotImplementedError
+    
     def read_exif(
         self,
         *args,

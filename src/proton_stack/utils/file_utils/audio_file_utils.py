@@ -111,6 +111,14 @@ class AudioFileUtils(BaseFileUtils):
     ) -> Any:
         raise NotImplementedError
     
+    @override
+    def get_checksum(
+        self,
+        *args,
+        **kwargs,
+    ) -> Any:
+        raise NotImplementedError
+    
     def open_reader(
         self,
         *args,

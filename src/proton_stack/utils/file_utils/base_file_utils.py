@@ -112,3 +112,11 @@ class BaseFileUtils:
         **kwargs,
     ) -> Any:
         raise NotImplementedError
+    
+    @abstractmethod
+    def get_checksum(
+        self,
+        *args,
+        **kwargs,
+    ) -> Any:
+        raise NotImplementedError

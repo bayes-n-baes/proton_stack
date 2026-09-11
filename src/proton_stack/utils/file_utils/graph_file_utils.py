@@ -21,6 +21,7 @@ class GraphFileUtils(BaseFileUtils):
         """
         Initializes the graph file utils.
         """
+        return
     
     @override
     def read_file(
@@ -104,6 +105,14 @@ class GraphFileUtils(BaseFileUtils):
     
     @override
     def convert_file(
+        self,
+        *args,
+        **kwargs,
+    ) -> Any:
+        raise NotImplementedError
+    
+    @override
+    def get_checksum(
         self,
         *args,
         **kwargs,
