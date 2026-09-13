@@ -95,14 +95,6 @@ class TextFileUtils(BaseFileUtils):
     ) -> Any:
         raise NotImplementedError
     
-    @override
-    def get_checksum(
-        self,
-        *args,
-        **kwargs,
-    ) -> Any:
-        raise NotImplementedError
-    
     def iter_chunks(
         self,
         *args,

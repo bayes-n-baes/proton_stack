@@ -95,14 +95,6 @@ class GraphFileUtils(BaseFileUtils):
     ) -> Any:
         raise NotImplementedError
     
-    @override
-    def get_checksum(
-        self,
-        *args,
-        **kwargs,
-    ) -> Any:
-        raise NotImplementedError
-    
     def read_edge_list(
         self,
         *args,

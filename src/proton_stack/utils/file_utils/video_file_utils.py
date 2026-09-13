@@ -94,14 +94,6 @@ class VideoFileUtils(BaseFileUtils):
         **kwargs,
     ) -> Any:
         raise NotImplementedError
-    
-    @override
-    def get_checksum(
-        self,
-        *args,
-        **kwargs,
-    ) -> Any:
-        raise NotImplementedError
         
     def open_reader(
         self,

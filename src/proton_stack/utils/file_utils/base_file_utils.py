@@ -5,6 +5,7 @@ utils/file_utils/base_file_utils.py
 The following file contains the BaseFileUtils implementation 
 to be inherited by the other modality-based classes.
 """
+import hashlib
 import json
 
 # Note: abstractmethod operates on a class instance while
@@ -22,8 +23,8 @@ class BaseFileUtils:
         self,
         *args,
         **kwargs,
-    ) -> Any:
-        raise NotImplementedError
+    ) -> None:
+        return
     
     # ============================================================================
     # Common utils
@@ -108,13 +109,34 @@ class BaseFileUtils:
     ) -> Any:
         raise NotImplementedError
     
-    @abstractmethod
     def get_checksum(
         self,
-        *args,
-        **kwargs,
-    ) -> Any:
-        raise NotImplementedError
+        path: Path,
+        algorithm: str = "sha256",
+        chunk_size: int = 1024*1024,
+    ) -> str:
+        """
+        Computes the checksum of a file.
+        
+        Args:
+            path (Path): Path to the file.
+            algorithm (str, optional): Hash algorithm, such as "sha256", "sha512", \
+                or "md5". Defaults to "sha256".
+            chunk_size (int, optional): Number of bytes read per iteration. \
+                Defaults to 1024*1024.
+
+        Returns:
+            str: Hexadecimal checksum string.
+        """
+        self.validate_file_path(path=path)
+        hasher = hashlib.new(algorithm)
+        
+        # reads the file bytes and updates the hash algorithm
+        with path.open("rb") as file:
+            while chunk := file.read(chunk_size):
+                hasher.update(chunk)
+                
+        return hasher.hexdigest()
     
     def create_dir(
         self,
@@ -129,7 +151,7 @@ class BaseFileUtils:
             path (Path): The file path or folder path from which \
                 the directories need to be created.
         """
-        path.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         
     def validate_file_path(
         self,
