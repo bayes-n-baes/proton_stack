@@ -207,31 +207,71 @@ class TableFileUtils(BaseFileUtils):
     @override
     def read_metadata(
         self,
-        df: pl.DataFrame
+        df: pl.DataFrame,
+        *,
+        max_categories: int = 20,
+        max_unique_ratio: float = 0.05,
     ) -> Dict[str, Any]:
         """
-        Retrieves the metadata from the provided Polars DataFrame.
+        Retrieves metadata and basic data-quality statistics from a DataFrame.
 
         Args:
-            df (pl.DataFrame): The DataFrame from which metadata \
-                is to be extracted.
+            df (pl.DataFrame): The DataFrame from which metadata is extracted.
+            max_categories (int, optional): Maximum distinct non-null numeric values \
+                for the categorical heuristic. Defaults to 20.
+            max_unique_ratio (float, optional): Maximum distinct/non-null count ratio \
+                for the categorical heuristic, between 0 and 1. Defaults to 0.05.
 
         Returns:
-            Dict[str, Any]: The extracted metadata from the DataFrame.
+            Dict[str, Any]: DataFrame and column-level metadata.
         """
-        table_metadata: Dict[str, Any] = {}
-        table_metadata["row_count"] = df.height
-        table_metadata["column_count"] = df.width
-        table_metadata["estimated_memory_mb"] = df.estimated_size("mb")
-        table_metadata["num_duplicate_rows"] = df.height - df.unique().height
-        # null_counts holds the column-wise number of nulls
+        # Numeric outliers use the 1.5 * IQR rule. Null, NaN, and infinite values
+        # are excluded from outlier statistics. Alphabetic and alphanumeric
+        # checks use Unicode letters and numbers and exclude null values.
+        # Numeric columns are possibly categorical when both distinct-value
+        # thresholds are met, excluding nulls. This is a heuristic, not a
+        # definitive classification. Non-numeric and all-null columns receive
+        # None for possibly_categorical and non_null_unique_ratio.
+        
+        if isinstance(max_categories, bool) or not isinstance(max_categories, int):
+            raise TypeError(
+                "max_categories must be an integer."
+            )
+        if max_categories < 1:
+            raise ValueError(
+                "max_categories must be greater than 0."
+            )
+        if not 0 <= max_unique_ratio <= 1:
+            raise ValueError(
+                "max_unique_ratio must be between 0 and 1."
+            )
+
+        table_metadata: Dict[str, Any] = {
+            "row_count": df.height,
+            "column_count": df.width,
+            "estimated_memory_mb": df.estimated_size("mb"),
+            "num_duplicate_rows": df.height - df.unique().height,
+        }
+
         null_counts = df.null_count().row(0, named=True)
-        # unique_counts holds the column-wise number of unique values
         unique_counts = df.select(pl.all().n_unique()).row(0, named=True)
-        table_metadata["columns"] = {
-            name: {
+        any_outlier_mask = pl.Series(
+            "is_outlier",
+            [False] * df.height,
+            dtype=pl.Boolean,
+        )
+        columns_metadata: Dict[str, Dict[str, Any]] = {}
+
+        for name, dtype in df.schema.items():
+            series = df[name]
+            is_numeric = dtype.is_numeric()
+            is_string = dtype == pl.String
+            column_metadata: Dict[str, Any] = {
                 "dtype": str(dtype),
-                "is_numeric": dtype.is_numeric(),
+                "is_numeric": is_numeric,
+                "possibly_categorical": None,
+                "non_null_unique_ratio": None,
+                "is_string": is_string,
                 "null_count": null_counts[name],
                 "null_percentage": (
                     100 * null_counts[name] / df.height
@@ -239,14 +279,92 @@ class TableFileUtils(BaseFileUtils):
                 ),
                 # Includes null as a distinct value.
                 "unique_count": unique_counts[name],
-                "min": df[name].min() if dtype.is_numeric() else None,
-                "max": df[name].max() if dtype.is_numeric() else None,
-                "mean": df[name].mean() if dtype.is_numeric() else None,
-                "median": df[name].median() if dtype.is_numeric() else None,
-                "std": df[name].std() if dtype.is_numeric() else None,
+                "min": series.min() if is_numeric else None,
+                "max": series.max() if is_numeric else None,
+                "mean": series.mean() if is_numeric else None,
+                "median": series.median() if is_numeric else None,
+                "std": series.std() if is_numeric else None,
+                "outlier_count": None,
+                "outlier_percentage": None,
+                "outlier_lower_bound": None,
+                "outlier_upper_bound": None,
+                "alphabetic_count": None,
+                "alphanumeric_count": None,
+                "alphabetic_percentage": None,
+                "alphanumeric_percentage": None,
+                "is_alphabetic": None,
+                "is_alphanumeric": None,
             }
-            for name, dtype in df.schema.items()
-        }
+
+            if is_numeric:
+                non_null_count = df.height - null_counts[name]
+                if non_null_count > 0:
+                    non_null_unique_count = unique_counts[name] - int(null_counts[name] > 0)
+                    unique_ratio = non_null_unique_count / non_null_count
+                    column_metadata["non_null_unique_ratio"] = unique_ratio
+                    column_metadata["possibly_categorical"] = (
+                        non_null_unique_count <= max_categories
+                        and unique_ratio <= max_unique_ratio
+                    )
+
+                numeric_series = series.cast(pl.Float64, strict=False)
+                finite_mask = numeric_series.is_finite().fill_null(False)
+                finite_values = numeric_series.filter(finite_mask)
+
+                if finite_values.len() > 0:
+                    q1 = finite_values.quantile(0.25, interpolation="linear")
+                    q3 = finite_values.quantile(0.75, interpolation="linear")
+                    iqr = q3 - q1
+                    lower_bound = q1 - 1.5 * iqr
+                    upper_bound = q3 + 1.5 * iqr
+                    outlier_mask = (
+                        finite_mask
+                        & (
+                            (numeric_series < lower_bound)
+                            | (numeric_series > upper_bound)
+                        ).fill_null(False)
+                    )
+                    outlier_count = int(outlier_mask.sum())
+
+                    column_metadata.update({
+                        "outlier_count": outlier_count,
+                        "outlier_percentage": (
+                            100 * outlier_count / finite_values.len()
+                        ),
+                        "outlier_lower_bound": lower_bound,
+                        "outlier_upper_bound": upper_bound,
+                    })
+                    any_outlier_mask = any_outlier_mask | outlier_mask
+
+            if is_string:
+                string_values = series.drop_nulls()
+                value_count = string_values.len()
+
+                if value_count > 0:
+                    alphabetic_count = int(
+                        string_values.str.contains(r"^\p{L}+$").sum()
+                    )
+                    alphanumeric_count = int(
+                        string_values.str.contains(
+                            r"^[\p{L}\p{N}]+$"
+                        ).sum()
+                    )
+                    column_metadata.update({
+                        "alphabetic_count": alphabetic_count,
+                        "alphanumeric_count": alphanumeric_count,
+                        "alphabetic_percentage": (
+                            100 * alphabetic_count / value_count
+                        ),
+                        "alphanumeric_percentage": (
+                            100 * alphanumeric_count / value_count
+                        ),
+                        "is_alphabetic": alphabetic_count == value_count,
+                        "is_alphanumeric": alphanumeric_count == value_count,
+                    })
+
+            columns_metadata[name] = column_metadata
+
+        table_metadata["columns"] = columns_metadata
         return table_metadata
     
     @override

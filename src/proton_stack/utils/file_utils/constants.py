@@ -15,6 +15,7 @@ Below are the supoprted modalities:
 import cv2
 from typing import List, Dict
 
+
 SUPPORTED_TABLE_BACKENDS: List = ["polars + duckdb"]  # doesn't support pandas
 SUPPORTED_IMAGE_BACKENDS: List = ["pil", "opencv", "torchcodec"]
 SUPPORTED_VIDEO_BACKENDS: List = ["pyav", "opencv", "torchcodec"]
