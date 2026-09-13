@@ -5,12 +5,12 @@ utils/file_utils/constants.py
 The following file contains all the constants related 
 to the different types of files and their utilities.
 Below are the supoprted modalities:
-    - Table
-    - Image
-    - Video
-    - Audio
-    - Texts
-    - Graph
+    - Table: Data that exists in rows and columns
+    - Image: Data that exists in pixel values
+    - Video: Data that exists in sequence of images
+    - Audio: Data that exists in time-series waveforms
+    - Texts: Data that exists in plain text
+    - Graph: Data that exists in nodes and edges
 """
 import cv2
 
@@ -50,8 +50,6 @@ SUPPORTED_AUDIO_CONVERSION_FORMATS = {
     
 }
 
-# xls: Legacy Microsoft Excel binary spreadsheet format.
-# ods: OpenDocument spreadsheet format used by LibreOffice and OpenOffice.
 # jsonl: Newline-delimited JSON where each line is a separate JSON record.
 # feather: Fast columnar binary format optimized for DataFrame interchange.
 # arrow: Apache Arrow columnar format for efficient in-memory and cross-language data exchange.

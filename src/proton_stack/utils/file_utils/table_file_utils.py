@@ -5,7 +5,6 @@ utils/file_utils/table_file_utils.py
 The following file contains the basic functionalities 
 for handling tabular data.
 """
-import json
 import pyarrow as pa
 import polars as pl
 import duckdb as db
@@ -16,7 +15,6 @@ from typing import Any, Union, List, Dict
 
 from .base_file_utils import BaseFileUtils
 from .constants import SUPPORTED_TABLE_BACKENDS, SUPPORTED_TABLE_FILE_FORMATS
-from ..utils.common_utils import CommonUtils
 
 
 class TableFileUtils(BaseFileUtils):
@@ -28,7 +26,6 @@ class TableFileUtils(BaseFileUtils):
         Initializes the table file utils.
         """
         super().__init__()
-        self.common_utils = CommonUtils()
         return
     
     def _read_file_query(
@@ -59,14 +56,10 @@ class TableFileUtils(BaseFileUtils):
         Returns:
             Union[pl.DataFrame | pl.LazyFrame]: The collected DataFrame or LazyFrame.
         """
-        self.validate_path(
-            path=path
-        )
-        self.validate_format(
-            path=path
-        )
-        file_suffix: str = path.suffix
-        rel: Union[None, db.DuckDBPyRelation] = None
+        super().validate_file_path(path=path)
+        super().validate_format(path=path, supported_formats=self.supported_formats())
+        file_suffix: str = path.suffix.lower()
+        rel: Union[None, db.DuckDBPyRelation] = None  # holds the relational DB
         
         if "parquet" in file_suffix:
             rel = self._read_file_query(
@@ -149,9 +142,9 @@ class TableFileUtils(BaseFileUtils):
             sheet_name (str, optional): The name of the sheet for *.xlsx \
                 files. Defaults to "Sheet1".
         """
-        self.validate_format(path=path)
-        path.mkdir(parents=True, exist_ok=True)
-        file_suffix: str = path.suffix
+        self.validate_format(path=path, supported_formats=self.supported_formats())
+        self.create_dir(path=path)
+        file_suffix: str = path.suffix.lower()
         
         if "parquet" in file_suffix:
             df.write_parquet(path)
@@ -184,50 +177,28 @@ class TableFileUtils(BaseFileUtils):
             df.write_avro(path)
     
     @override
+    def supported_backends(
+        self,
+    ) -> List[str]:
+        """
+        Retrieves the list of supported backlends.
+
+        Returns:
+            List[str]: The list of all the supported table backends.
+        """
+        return SUPPORTED_TABLE_BACKENDS
+        
+    @override
     def supported_formats(
         self,
-    ) -> List:
+    ) -> List[str]:
         """
         Retrieves the list of supported file formats.
 
         Returns:
-            List: The list of all the supported table file format.
+            List[str]: The list of all the supported table file format.
         """
         return SUPPORTED_TABLE_FILE_FORMATS
-    
-    @override
-    def validate_path(
-        self,
-        path: Path,
-    ) -> None:
-        """
-        Checks if a path is a valid file and it exists.
-
-        Args:
-            path (Path): The input path to be validated.
-        """
-        if not (path.is_file() and path.exists()):
-            raise FileNotFoundError(
-                f"File with path: {path} is not found. Check path again."
-            )
-    
-    @override
-    def validate_format(
-        self,
-        path: Path,
-    ) -> None:
-        """
-        Checks if the path exists in the supported formats.
-
-        Args:
-            path (Path): The path for checking file format support.
-        """
-        file_suffix = path.suffix
-        if file_suffix not in self.supported_formats():
-            raise RuntimeError(
-                f"File with format: {file_suffix} is not supported. Supported \
-                    file formats include: {SUPPORTED_TABLE_FILE_FORMATS}"
-            )
 
     @override
     def read_metadata(
@@ -248,6 +219,7 @@ class TableFileUtils(BaseFileUtils):
         table_metadata["row_count"] = df.height
         table_metadata["column_count"] = df.width
         table_metadata["estimated_memory_mb"] = df.estimated_size("mb")
+        table_metadata["num_duplicate_rows"] = df.height - df.unique().height
         # null_counts holds the column-wise number of nulls
         null_counts = df.null_count().row(0, named=True)
         # unique_counts holds the column-wise number of unique values
@@ -271,7 +243,6 @@ class TableFileUtils(BaseFileUtils):
             }
             for name, dtype in df.schema.items()
         }
-        table_metadata["num_duplicate_rows"] = df.height - df.unique().height
         return table_metadata
     
     @override
@@ -280,18 +251,18 @@ class TableFileUtils(BaseFileUtils):
         df: pl.DataFrame,
         path: Path,
     ) -> None:
-        file_suffix = path.suffix
-        if file_suffix not in [".json"]:
-            raise RuntimeError(
-                "Extracted metadata can be saved only in JSON format. Check provided path."
-            )
-        
-        # Generate the metadata from the DataFrame
-        extracted_metadata = self.read_metadata(df=df)
-        # with open(path, "w") as file:
-        #     json.dump(extracted_metadata, file, indent=2)
+        """
+        Extracts and saves the metadata from a Polars DataFrame.
+
+        Args:
+            df (pl.DataFrame): The Polars DataFrame from which metadata \
+                needs to be extracted.
+            path (Path): The path at which the metadata needs to be saved.
+        """
+        self.validate_format(path=path, supported_formats=[".json"])
+        obj = self.read_metadata(df=df)
+        self.save_json(obj=obj, path=path)
             
-    
     @override
     def verify_file(
         self,

@@ -48,22 +48,6 @@ class ImageFileUtils(BaseFileUtils):
         raise NotImplementedError
     
     @override
-    def validate_path(
-        self,
-        *args,
-        **kwargs,
-    ) -> Any:
-        raise NotImplementedError
-    
-    @override
-    def validate_format(
-        self,
-        *args,
-        **kwargs,
-    ) -> Any:
-        raise NotImplementedError
-    
-    @override
     def read_metadata(
         self,
         *args,
