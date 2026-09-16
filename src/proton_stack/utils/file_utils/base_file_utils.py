@@ -12,18 +12,26 @@ import json
 # abstractclassmethod operates on the class itself.
 #   - abstractmethod calls instance.method()
 #   - abstractclassmethod calls class.method()
-from abc import abstractmethod
+from abc import abstractmethod, ABC
 from typing import Any, Dict, List
 from pathlib import Path
 
 
-class BaseFileUtils:
+class BaseFileUtils(ABC):
     
     def __init__(
         self,
         *args,
         **kwargs,
     ) -> None:
+        """Initialize the base utility without allocating resources.
+
+        Args:
+            *args: Positional arguments accepted for subclass compatibility;
+                ignored by this implementation.
+            **kwargs: Keyword arguments accepted for subclass compatibility;
+                ignored by this implementation.
+        """
         return
     
     # ============================================================================
@@ -116,17 +124,28 @@ class BaseFileUtils:
         chunk_size: int = 1024*1024,
     ) -> str:
         """
-        Computes the checksum of a file.
-        
+        Compute a hexadecimal digest of a nonempty file.
+
         Args:
-            path (Path): Path to the file.
-            algorithm (str, optional): Hash algorithm, such as "sha256", "sha512", \
-                or "md5". Defaults to "sha256".
-            chunk_size (int, optional): Number of bytes read per iteration. \
-                Defaults to 1024*1024.
+            path (Path): Existing, nonempty file to hash.
+            algorithm (str, optional): Algorithm name accepted by hashlib.new
+                whose hexdigest method requires no length argument, such as
+                "sha256", "sha512", or "md5". Defaults to "sha256".
+            chunk_size (int, optional): Bytes requested per read. Use a positive
+                integer to hash the complete file in bounded chunks. Defaults
+                to 1,048,576 bytes (1 MiB).
 
         Returns:
-            str: Hexadecimal checksum string.
+            str: Hexadecimal digest of the bytes read from the file.
+
+        Raises:
+            RuntimeError: If file validation fails, including an empty file.
+            ValueError: If the requested hash algorithm is unsupported.
+            OSError: If opening or reading the file fails.
+
+        Notes:
+            chunk_size is not validated. Zero hashes no content; a negative
+            value reads the remaining file into memory at once.
         """
         self.validate_file_path(path=path)
         hasher = hashlib.new(algorithm)
@@ -141,28 +160,58 @@ class BaseFileUtils:
     def create_dir(
         self,
         path: Path,
+        is_file: bool = True,
     ) -> None:
         """
-        Creates a directory from a given path.
-        Could be both a file path or a directory path.
-        For file paths, it creates the parent directory.
+        Create a directory or the parent directories of a destination file.
 
         Args:
-            path (Path): The file path or folder path from which \
-                the directories need to be created.
+            path (Path): File or directory path, whether or not it exists.
+            is_file (bool, optional): If True, create only path.parent.
+                If False, create path itself as a directory. Defaults to True
+                for compatibility with file-writing methods.
+
+        Raises:
+            TypeError: If is_file is not a boolean.
+            OSError: If the target directory cannot be created, for example
+                because access is denied or a component is an existing file.
+
+        Notes:
+            Missing ancestors are created recursively and existing directories
+            are accepted. File mode does not create or validate the destination
+            file. Path intent is explicit: suffixes and existence cannot reliably
+            distinguish new files from directories.
+
+        Examples:
+            Create parents for a file without creating the file:
+                utils.create_dir(Path("exports/reports/results.csv"))
+
+            Create a directory and any missing ancestors:
+                utils.create_dir(Path("exports/reports"), is_file=False)
         """
-        path.parent.mkdir(parents=True, exist_ok=True)
+        directory = path.parent if is_file else path
+        directory.mkdir(parents=True, exist_ok=True)
         
     def validate_file_path(
         self,
         path: Path,        
     ) -> None:
-        """
-        Checks if a file path is an actual file path, it exists, 
-        and is greater than 0 bytes.
+        """Require a path to reference an existing, nonempty regular file.
 
         Args:
-            path (Path): The file path to validate.
+            path (Path): File path to inspect.
+
+        Raises:
+            RuntimeError: If path does not resolve to a regular file or the
+                file has zero bytes. Missing paths normally raise this error
+                because the file-type check runs first.
+            FileNotFoundError: If the file disappears after the file-type check.
+            OSError: If a filesystem operation fails.
+
+        Notes:
+            This validates filesystem properties only, not file contents or
+            format integrity. Symbolic links are followed. Validation does not
+            guarantee that the path remains unchanged before a later read.
         """
         if not path.is_file():  # Checks if the path corresponds to a file
             raise RuntimeError(
@@ -181,11 +230,18 @@ class BaseFileUtils:
         self,
         path: Path,
     ) -> None:
-        """
-        Checks if a directory path is a directory and if it exists.
+        """Require a path to reference an existing directory.
 
         Args:
-            path (Path): The directory path to check.
+            path (Path): Directory path to inspect.
+
+        Raises:
+            RuntimeError: If path is missing or does not resolve to a directory.
+            OSError: If a filesystem operation fails.
+
+        Notes:
+            Symbolic links are followed. This does not check whether the
+            directory is readable or writable.
         """
         if not path.is_dir():  # Checks if the path corresponds to a directory
             raise RuntimeError(
@@ -201,13 +257,21 @@ class BaseFileUtils:
         path: Path,
         supported_formats: List[str],
     ) -> None:
-        """
-        Checks if the path exists in the supported formats.
+        """Check a path's final suffix against the allowed file formats.
 
         Args:
-            path (Path): The path for checking file format support.
-            supported_formats (List[str]): The list of supported formats for \
-                a modality.
+            path (Path): Path whose suffix is checked; it need not exist.
+            supported_formats (List[str]): Allowed lowercase suffixes with
+                leading dots, such as [".csv", ".parquet"].
+
+        Raises:
+            RuntimeError: If the lowercased final suffix is not in
+                supported_formats.
+
+        Notes:
+            Only the path suffix is checked; file contents are not inspected.
+            Compound extensions are not combined: data.csv.gz has suffix .gz.
+            The supplied list of supported formats is not normalized.
         """
         file_suffix = path.suffix.lower()
         if file_suffix not in supported_formats:
@@ -220,14 +284,20 @@ class BaseFileUtils:
         self,
         obj: Dict[Any, Any]
     ) -> Dict[Any, Any]:
-        """
-        Checks if the loaded *.json file is a valid json.
+        """Require an object to be a Python dictionary.
 
         Args:
-            obj (Dict[Any, Any]): The loaded *.json object.
+            obj (Dict[Any, Any]): Object to check as a JSON object representation.
 
         Returns:
-            Dict[Any, Any]: The validated *.json object.
+            Dict[Any, Any]: The original dictionary, without copying or changes.
+
+        Raises:
+            ValueError: If obj is not a dict instance.
+
+        Notes:
+            This checks the top-level type only. It does not validate nested
+            values, key types, JSON serializability, or an application schema.
         """
         if not isinstance(obj, dict):
             raise ValueError(
@@ -240,42 +310,29 @@ class BaseFileUtils:
         path: Path,
         encoding: str = "utf-8",
     ) -> Dict[Any, Any]:
-        """
-        Reads a *.json file.
-        
-        Note: *.json doesn't support certain formats and requires explicit \
-            conversion. Example as follows:
-            
-            ```python
-                data = {
-                    "created_at": datetime.now(),
-                    "source": Path("data.csv"),
-                }
-
-                # Convert special types into JSON-compatible values.
-                serializable = {
-                    "created_at": data["created_at"].isoformat(),
-                    "source": str(data["source"]),
-                }
-                
-                with open("data.json", "w", encoding="utf-8") as file:
-                    json.dump(serializable, file, indent=4)
-
-                with open("data.json", "r", encoding="utf-8") as file:
-                    loaded = json.load(file)
-
-                # Restore the desired Python types.
-                loaded["created_at"] = datetime.fromisoformat(loaded["created_at"])
-                loaded["source"] = Path(loaded["source"])
-            ```
+        """Decode a nonempty JSON file and require a top-level object.
 
         Args:
-            path (Path): The path to the *.json file.
-            encoding (str, optional): The optional encoding type for the \
-                read method. Defaults to "utf-8".
+            path (Path): Existing, nonempty file containing JSON. The suffix
+                is not checked.
+            encoding (str, optional): Text encoding used to open the file.
+                Defaults to "utf-8".
 
         Returns:
-            Dict[Any, Any]: The loaded json file.
+            Dict[Any, Any]: Decoded top-level JSON object as a dictionary.
+
+        Raises:
+            RuntimeError: If file validation fails.
+            json.JSONDecodeError: If the decoded text is not valid JSON.
+            ValueError: If the JSON value is not an object, such as an array
+                or scalar.
+            UnicodeDecodeError: If the file cannot be decoded with encoding.
+            OSError: If opening or reading the file fails.
+
+        Notes:
+            The complete JSON document is loaded into memory. Dates, paths,
+            and other application-specific types are not reconstructed from
+            their serialized representations.
         """
         self.validate_file_path(path=path)
         with open(str(path), "r", encoding=encoding) as file:
@@ -288,41 +345,32 @@ class BaseFileUtils:
         path: Path,
         encoding: str = "utf-8"
     ) -> None:
-        """
-        Saves a *.json file.
-        
-        Note: *.json doesn't support certain formats and requires explicit \
-            conversion. Example as follows:
-            
-            ```python
-                data = {
-                    "created_at": datetime.now(),
-                    "source": Path("data.csv"),
-                }
+        """Serialize an object as indented JSON at the destination path.
 
-                # Convert special types into JSON-compatible values.
-                serializable = {
-                    "created_at": data["created_at"].isoformat(),
-                    "source": str(data["source"]),
-                }
-                
-                with open("data.json", "w", encoding="utf-8") as file:
-                    json.dump(serializable, file, indent=4)
-
-                with open("data.json", "r", encoding="utf-8") as file:
-                    loaded = json.load(file)
-
-                # Restore the desired Python types.
-                loaded["created_at"] = datetime.fromisoformat(loaded["created_at"])
-                loaded["source"] = Path(loaded["source"])
-            ```
-            
         Args:
-            obj (Dict[Any, Any]): The object to be serialized and \
-                save as a *.json.
-            path (Path): The path to the *.json file.
-            encoding (str, optional): The optional encoding type for the \
-                write method. Defaults to "utf-8".
+            obj (Dict[Any, Any]): Object to encode with the standard JSON
+                encoder. Dictionary input is expected but is not validated.
+            path (Path): Destination file. Missing parent directories are
+                created and an existing file is overwritten. No suffix check
+                is performed.
+            encoding (str, optional): Text encoding used to write the file.
+                Defaults to "utf-8".
+
+        Raises:
+            TypeError: If obj contains values or keys unsupported by the encoder.
+            ValueError: If circular references are detected.
+            UnicodeEncodeError: If output text cannot be encoded with encoding.
+            OSError: If creating parent directories or writing the file fails.
+
+        Notes:
+            Output uses four-space indentation and preserves non-ASCII
+            characters rather than escaping them. Standard encoder defaults
+            apply, including allowing NaN and infinity tokens.
+
+            Convert unsupported values such as datetime, Path, and Decimal to
+            JSON-compatible representations before calling this method. Writes
+            are not atomic: an encoding or serialization failure may leave an
+            existing destination truncated or partially written.
         """
         self.create_dir(path=path)
         with open(str(path), "w", encoding=encoding) as file:

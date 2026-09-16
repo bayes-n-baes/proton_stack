@@ -1,6 +1,5 @@
 """
-utils/file_utils/__init__.py
-----------------------------
+Interface to expose the important file utils classes
 """
 from .base_file_utils import BaseFileUtils
 from .table_file_utils import TableFileUtils

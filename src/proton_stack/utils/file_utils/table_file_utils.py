@@ -1,9 +1,9 @@
 """
-utils/file_utils/table_file_utils.py
-------------------------------------
+Read, write, inspect, and convert tabular data with Polars and DuckDB.
 
-The following file contains the basic functionalities 
-for handling tabular data.
+File extensions select the reader or writer. PyArrow provides ORC and
+incremental columnar writers. Supported formats and backend labels are
+defined in the sibling constants module.
 """
 import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
@@ -21,12 +21,23 @@ from .constants import SUPPORTED_TABLE_BACKENDS, SUPPORTED_TABLE_FILE_FORMATS
 
 
 class TableFileUtils(BaseFileUtils):
+    """
+    Provide file, buffer, batch, and metadata operations for tabular data.
+
+    Methods accept Polars DataFrames and pathlib paths. File-based operations
+    select formats from case-insensitive suffixes; buffer operations accept an
+    explicit format. LazyFrame results do not always imply deferred file I/O:
+    see scan_file for formats that require eager loading.
+
+    Reader, writer, filesystem, and optional dependency errors propagate unless
+    otherwise documented by the method.
+    """
     
     def __init__(
         self,
     ) -> None:
         """
-        Initializes the table file utils.
+        Initialize the utility through the base-class constructor.
         """
         super().__init__()
         return
@@ -35,6 +46,15 @@ class TableFileUtils(BaseFileUtils):
         self,
         query: Any,
     ) -> db.DuckDBPyRelation:
+        """
+        Submit a SQL query to the default DuckDB connection.
+
+        Args:
+            query (Any): SQL query accepted by duckdb.sql.
+
+        Returns:
+            db.DuckDBPyRelation: Relation produced by the query.
+        """
         return db.sql(query)
         
     @override
@@ -44,20 +64,33 @@ class TableFileUtils(BaseFileUtils):
         lazy: bool = False,
         collect: bool = False,
         sheet_name: str = None,
-    ) -> Union[pl.DataFrame | pl.LazyFrame]:
+    ) -> Union[pl.DataFrame, pl.LazyFrame]:
         """
-        Reads any table with DuckDB and Polars DataFrame.
+        Read a supported table file through DuckDB into Polars.
 
         Args:
-            path (Path): The input path to the file to be read.
-            lazy (bool, optional): Ensures Polars LazyFrame is returned. Defaults to False.
-            collect (bool, optional): Collects the Polars LazyFrame into Polars \
-                DataFrame. Defaults to False.
-            sheet_name (str, optional): Only used for *.xlsx files, referes to \
-                the sheet to be loaded. Defaults to None.
+            path (Path): Existing, nonempty file with a supported suffix.
+            lazy (bool, optional): Request a LazyFrame from the DuckDB relation.
+                Defaults to False.
+            collect (bool, optional): Collect the result when lazy is True.
+                Has no effect when lazy is False. Defaults to False.
+            sheet_name (str, optional): XLSX worksheet name; ignored for other
+                formats. Defaults to None. The current SQL construction passes
+                None as the literal sheet name "None" rather than omitting it.
 
         Returns:
-            Union[pl.DataFrame | pl.LazyFrame]: The collected DataFrame or LazyFrame.
+            Union[pl.DataFrame, pl.LazyFrame]: A LazyFrame only when lazy is True and
+                collect is False; otherwise, a materialized DataFrame.
+
+        Raises:
+            RuntimeError: If path validation fails or the suffix is unsupported.
+
+        Notes:
+            Feather and Arrow reads install and load the nanoarrow community
+            extension; ORC reads install and load the orc community extension.
+            These operations can require network access and extension permissions.
+            Paths and worksheet names are interpolated into SQL without escaping;
+            embedded single quotes are not supported safely.
         """
         super().validate_file_path(path=path)
         super().validate_format(path=path, supported_formats=self.supported_formats())
@@ -138,13 +171,21 @@ class TableFileUtils(BaseFileUtils):
         sheet_name: str = "Sheet1",
     ) -> None:
         """
-        Saves a Polars DataFrame into the expected file format.
+        Serialize a DataFrame using the format selected by the output suffix.
 
         Args:
-            df (pl.DataFrame): The file to be exported and saved.
-            path (Path): The output path.
-            sheet_name (str, optional): The name of the sheet for *.xlsx \
-                files. Defaults to "Sheet1".
+            df (pl.DataFrame): Table to serialize.
+            path (Path): Destination file with a supported suffix.
+            sheet_name (str, optional): Worksheet name for XLSX output; ignored
+                for other formats. Defaults to "Sheet1".
+
+        Raises:
+            RuntimeError: If the output suffix is unsupported.
+
+        Notes:
+            Directory preparation is delegated to BaseFileUtils.create_dir.
+            JSON output is an array of records; JSONL output contains one record
+            per line. Feather and Arrow use the Arrow IPC file format.
         """
         self.validate_format(path=path, supported_formats=self.supported_formats())
         self.create_dir(path=path)
@@ -185,10 +226,10 @@ class TableFileUtils(BaseFileUtils):
         self,
     ) -> List[str]:
         """
-        Retrieves the list of supported backlends.
+        Return the configured table backend labels.
 
         Returns:
-            List[str]: The list of all the supported table backends.
+            List[str]: The shared SUPPORTED_TABLE_BACKENDS list, not a copy.
         """
         return SUPPORTED_TABLE_BACKENDS
         
@@ -197,10 +238,11 @@ class TableFileUtils(BaseFileUtils):
         self,
     ) -> List[str]:
         """
-        Retrieves the list of supported file formats.
+        Return the supported table file suffixes.
 
         Returns:
-            List[str]: The list of all the supported table file format.
+            List[str]: The shared SUPPORTED_TABLE_FILE_FORMATS list of lowercase
+                suffixes with leading dots, not a copy.
         """
         return SUPPORTED_TABLE_FILE_FORMATS
 
@@ -208,22 +250,58 @@ class TableFileUtils(BaseFileUtils):
     def read_metadata(
         self,
         df: pl.DataFrame,
-        *,
         max_categories: int = 20,
         max_unique_ratio: float = 0.05,
     ) -> Dict[str, Any]:
         """
-        Retrieves metadata and basic data-quality statistics from a DataFrame.
+        Compute table dimensions, column statistics, and data-quality indicators.
 
         Args:
-            df (pl.DataFrame): The DataFrame from which metadata is extracted.
-            max_categories (int, optional): Maximum distinct non-null numeric values \
-                for the categorical heuristic. Defaults to 20.
-            max_unique_ratio (float, optional): Maximum distinct/non-null count ratio \
-                for the categorical heuristic, between 0 and 1. Defaults to 0.05.
+            df (pl.DataFrame): Materialized table to inspect.
+            max_categories (int, optional): Positive maximum number of distinct
+                non-null values for the numeric categorical heuristic. Boolean
+                arguments are rejected. Defaults to 20.
+            max_unique_ratio (float, optional): Maximum ratio of distinct non-null
+                values to non-null entries for that heuristic, in [0, 1].
+                Defaults to 0.05.
 
         Returns:
-            Dict[str, Any]: DataFrame and column-level metadata.
+            Dict[str, Any]: Table-level row_count, column_count,
+                estimated_memory_mb, num_duplicate_rows, and columns. The columns
+                mapping is keyed by column name and contains dtype flags, null
+                and distinct counts, numeric summaries, categorical indicators,
+                outlier statistics, and string-content statistics. Inapplicable
+                statistics are None.
+
+        Raises:
+            TypeError: If max_categories is not an integer or max_unique_ratio
+                cannot be compared with the numeric bounds.
+            ValueError: If max_categories is less than 1 or max_unique_ratio is
+                outside [0, 1].
+
+        Notes:
+            unique_count includes null as a distinct value. null_percentage uses
+            the total row count and is None for a table with no rows.
+
+            For numeric columns, possibly_categorical is True only when both
+            thresholds are met. non_null_unique_ratio excludes nulls from its
+            numerator and denominator; NaN and infinity are not excluded by this
+            heuristic. Both fields are None for non-numeric or all-null columns.
+            A False result does not establish that a column is continuous.
+
+            Outliers fall strictly outside [Q1 - 1.5 * IQR, Q3 + 1.5 * IQR], using
+            linear quantile interpolation after conversion to Float64. Null,
+            NaN, and infinite values are excluded. outlier_percentage uses the
+            finite-value count; outlier fields remain None without finite values.
+            The other numeric summaries operate on the original series.
+
+            String checks require one or more Unicode letters (alphabetic), or
+            letters and numbers (alphanumeric). Percentages use non-null entries;
+            empty strings fail both checks. String fields remain None without
+            non-null string values. Percentages are expressed on a 0-to-100 scale.
+
+            This method performs whole-table aggregations, including duplicate
+            detection, and may require substantial memory for large tables.
         """
         # Numeric outliers use the 1.5 * IQR rule. Null, NaN, and infinite values
         # are excluded from outlier statistics. Alphabetic and alphanumeric
@@ -374,12 +452,20 @@ class TableFileUtils(BaseFileUtils):
         path: Path,
     ) -> None:
         """
-        Extracts and saves the metadata from a Polars DataFrame.
+        Compute metadata with default thresholds and serialize it as JSON.
 
         Args:
-            df (pl.DataFrame): The Polars DataFrame from which metadata \
-                needs to be extracted.
-            path (Path): The path at which the metadata needs to be saved.
+            df (pl.DataFrame): Table to inspect with read_metadata.
+            path (Path): Destination file with a .json suffix.
+
+        Raises:
+            RuntimeError: If the destination suffix is not .json.
+            TypeError: If the resulting metadata contains values unsupported by
+                the standard JSON encoder.
+
+        Notes:
+            Directory preparation and JSON encoding use the base-class helpers.
+            Numeric metadata values are not normalized for JSON serialization.
         """
         self.validate_format(path=path, supported_formats=[".json"])
         self.create_dir(path=path)
@@ -394,18 +480,23 @@ class TableFileUtils(BaseFileUtils):
         num_rows: int = 1,
     ) -> bool:
         """
-        Checks if a file could be loaded.
-        Supports two formats, one full and the other partial.
+        Check whether a full read or preview completes without an exception.
 
         Args:
-            path (Path): The file to be loaded.
-            full (bool, optional): Loads the complete file if True else \
-                num_rows. Defaults to False.
-            num_rows (int): Number of rows to load from the file path. \
-                Defaults to 1.
+            path (Path): Table file to check.
+            full (bool, optional): Read the full table through read_file when
+                True; otherwise, use preview_file. Defaults to False.
+            num_rows (int, optional): Preview size when full is False. Ignored
+                for a full read. Defaults to 1.
 
         Returns:
-            bool: If the process of loading the file successful.
+            bool: True if the selected operation succeeds, otherwise False.
+                All Exception subclasses raised by the operation are suppressed.
+
+        Notes:
+            A successful preview does not establish that the entire file is
+            readable. For formats with eager scan fallbacks, a preview still
+            loads the full table. This does not validate an expected schema.
         """
         try:
             if full:
@@ -425,16 +516,25 @@ class TableFileUtils(BaseFileUtils):
         sheet_name: str = None,
     ) -> pl.DataFrame:
         """
-        Decodes tabular data stored in an in-memory byte buffer.
+        Deserialize an in-memory table into a Polars DataFrame.
 
         Args:
-            data (bytes): The serialized tabular data.
-            file_format (str): The data format, with a leading dot.
-            sheet_name (str, optional): Sheet to read from an *.xlsx buffer.
-                Defaults to None.
+            data (bytes): Complete serialized table payload.
+            file_format (str): Supported format, case-insensitive and with or
+                without a leading dot, such as "parquet" or ".CSV".
+            sheet_name (str, optional): XLSX worksheet to read. None selects the
+                default first sheet. Ignored for other formats. Defaults to None.
 
         Returns:
-            pl.DataFrame: The decoded Polars DataFrame.
+            pl.DataFrame: Materialized table decoded from data.
+
+        Raises:
+            RuntimeError: If the normalized format is unsupported.
+
+        Notes:
+            JSON expects a JSON table; JSONL uses the newline-delimited reader.
+            Feather and Arrow use the IPC file reader. XLSX requires the optional
+            dependencies used by the Polars Excel reader.
         """
         file_format = f".{file_format.lower().lstrip('.')}"
         if file_format not in SUPPORTED_TABLE_FILE_FORMATS:
@@ -482,16 +582,25 @@ class TableFileUtils(BaseFileUtils):
         sheet_name: str = "Sheet1",
     ) -> bytes:
         """
-        Encodes a Polars DataFrame into an in-memory byte buffer.
+        Serialize a DataFrame into an in-memory byte buffer.
 
         Args:
-            df (pl.DataFrame): The DataFrame to encode.
-            file_format (str): The output format, with a leading dot.
-            sheet_name (str, optional): Sheet name for *.xlsx output.
-                Defaults to "Sheet1".
+            df (pl.DataFrame): Table to serialize.
+            file_format (str): Supported format, case-insensitive and with or
+                without a leading dot.
+            sheet_name (str, optional): Worksheet name for XLSX output; ignored
+                for other formats. Defaults to "Sheet1".
 
         Returns:
-            bytes: The encoded tabular data.
+            bytes: Complete serialized payload in the requested format.
+
+        Raises:
+            RuntimeError: If the normalized format is unsupported.
+
+        Notes:
+            The entire output is buffered in memory. JSON produces an array of
+            records; JSONL produces newline-delimited records. Feather and Arrow
+            produce IPC files.
         """
         file_format = f".{file_format.lower().lstrip('.')}"
         if file_format not in SUPPORTED_TABLE_FILE_FORMATS:
@@ -542,15 +651,21 @@ class TableFileUtils(BaseFileUtils):
         output_sheet_name: str = "Sheet1",
     ) -> None:
         """
-        Converts a file from one format to another format.
+        Read a complete table and write it in the destination format.
 
         Args:
-            input_path (Path): The file path to be loaded.
-            output_path (Path): The file path in which the loaded file is converted.
-            input_sheet_name (str, optional): Input sheet name only if the \
-                input_path is *.xlsx. Defaults to None.
-            output_sheet_name (str, optional): Output sheet name only if the \
-                output_path is *.xlsx. Defaults to "Sheet1".
+            input_path (Path): Existing, nonempty source table file.
+            output_path (Path): Destination file; its suffix selects the format.
+            input_sheet_name (str, optional): Source XLSX worksheet, forwarded
+                to read_file. Ignored for other formats. Defaults to None.
+            output_sheet_name (str, optional): Destination XLSX worksheet.
+                Ignored for other formats. Defaults to "Sheet1".
+
+        Notes:
+            The source is fully materialized in memory. Conversion preserves the
+            table only as supported by the readers and writers; it does not copy
+            workbook styling or other format-specific file metadata. Read and
+            write failures propagate from read_file and save_file.
         """
         df = self.read_file(
             path=input_path, lazy=False, collect=False, sheet_name=input_sheet_name
@@ -565,15 +680,29 @@ class TableFileUtils(BaseFileUtils):
         sheet_name: str = None,
     ) -> pl.LazyFrame:
         """
-        Returns a LazyFrame for any supported table format.
+        Create a queryable LazyFrame from a supported table file.
 
         Args:
-            path (Path): The path to the input file.
-            sheet_name (str, optional): Worksheet to read for XLSX files.
-                Defaults to the first sheet when None.
+            path (Path): Existing, nonempty file with a supported suffix.
+            sheet_name (str, optional): XLSX worksheet to read. None selects the
+                first sheet. Ignored for other formats. Defaults to None.
 
         Returns:
-            pl.LazyFrame: The polars LazyFrame which can be queried and filtered.
+            pl.LazyFrame: Table on which further expressions can be applied
+                before collect is called.
+
+        Raises:
+            RuntimeError: If path validation fails or the suffix is unsupported.
+
+        Notes:
+            Parquet, CSV, TSV, JSONL, Feather, and Arrow use native lazy scanners.
+            Feather and Arrow are interpreted as IPC files.
+
+            JSON, XLSX, ORC, and Avro are read eagerly and then converted to a
+            LazyFrame. These fallbacks require memory for the entire table and
+            cannot push subsequent filters or row limits into the file reader.
+            Native scanner errors may surface later, during schema resolution
+            or collection.
         """
         self.validate_file_path(path=path)
         self.validate_format(path=path, supported_formats=SUPPORTED_TABLE_FILE_FORMATS)
@@ -614,13 +743,17 @@ class TableFileUtils(BaseFileUtils):
         path: Path,
     ) -> pl.Schema:
         """
-        Retrieves the schema of the data.
+        Resolve column names and data types through scan_file.
 
         Args:
-            path (Path): The input file path.
+            path (Path): Existing, nonempty table file with a supported suffix.
 
         Returns:
-            pl.Schema: The extracted schema from the file path.
+            pl.Schema: Ordered mapping of column names to Polars data types.
+
+        Notes:
+            Schema resolution may inspect data. Formats with eager scan_file
+            fallbacks load the entire table. XLSX uses the first worksheet.
         """
         return self.scan_file(path).collect_schema()
     
@@ -630,15 +763,20 @@ class TableFileUtils(BaseFileUtils):
         num_rows: int = 1,
     ) -> pl.DataFrame:
         """
-        Scans the table and reads top n rows.
+        Collect the leading rows of a table through scan_file.
 
         Args:
-            path (Path): The input file path.
-            num_rows (int, optional): Top n rows to read from the loaded \
-                table. Defaults to 1.
+            path (Path): Existing, nonempty table file with a supported suffix.
+            num_rows (int, optional): Row count passed to LazyFrame.head.
+                Use a nonnegative value for a bounded preview. Defaults to 1.
 
         Returns:
-            pl.DataFrame: The top-n rows from a table file.
+            pl.DataFrame: Leading rows, limited by the available table height
+                when num_rows is nonnegative.
+
+        Notes:
+            Formats with eager scan_file fallbacks load the entire table before
+            applying the limit. XLSX uses the first worksheet.
         """
         return self.scan_file(path=path).head(num_rows).collect()
     
@@ -648,16 +786,24 @@ class TableFileUtils(BaseFileUtils):
         batch_size: int = 10_000,
     ) -> Iterator[pl.DataFrame]:
         """
-        Lazily reads a table and yields bounded Polars 
-        DataFrame batches.
+        Yield DataFrame batches from a lazy DuckDB-backed table read.
 
         Args:
-            path (Path): The input table path.
-            batch_size (int, optional): Maximum target number of \
-                rows per batch. Defaults to 10,000.
+            path (Path): Existing, nonempty table file with a supported suffix.
+            batch_size (int, optional): Positive target row count passed to
+                LazyFrame.collect_batches as chunk_size. Defaults to 10,000.
 
         Yields:
-            pl.DataFrame: The next batch of rows.
+            pl.DataFrame: Successive batches produced by the query engine.
+
+        Raises:
+            TypeError: If batch_size is not an integer, including bool values.
+            ValueError: If batch_size is less than 1.
+
+        Notes:
+            Validation and reading begin when the iterator is consumed. Backend
+            and file errors propagate during iteration. The requested batch size
+            does not bound total memory used by the reader or query engine.
         """
         if not isinstance(batch_size, int) or isinstance(batch_size, bool):
             raise TypeError("batch_size must be an integer.")
@@ -678,14 +824,30 @@ class TableFileUtils(BaseFileUtils):
         sheet_name: str = "Sheet1",
     ) -> None:
         """
-        Writes Polars DataFrame batches to any supported table format.
+        Serialize an iterable of matching DataFrame batches to one file.
 
         Args:
-            batches (Iterable[pl.DataFrame]): DataFrame batches with \
-                matching schemas.
-            path (Path): The output file path.
-            sheet_name (str, optional): Worksheet name for XLSX output.
-                Defaults to "Sheet1".
+            batches (Iterable[pl.DataFrame]): Nonempty iterable of DataFrames
+                with the same schema as the first batch. Individual batches may
+                contain zero rows. The iterable is consumed once.
+            path (Path): Destination file with a supported suffix.
+            sheet_name (str, optional): Worksheet name for XLSX output; ignored
+                for other formats. Defaults to "Sheet1".
+
+        Raises:
+            RuntimeError: If the output suffix is unsupported.
+            TypeError: If any batch is not a Polars DataFrame.
+            ValueError: If batches is empty or a later batch has a different
+                schema from the first batch.
+
+        Notes:
+            Parquet, IPC, CSV, TSV, JSON, JSONL, and ORC are written incrementally.
+            XLSX and Avro concatenate all batches in memory before writing.
+            CSV and TSV contain one header; JSON contains a single record array.
+
+            Batch validation occurs during consumption. Writes are not atomic:
+            a late failure can leave a partial destination file. Directory
+            preparation is delegated to BaseFileUtils.create_dir.
         """
         self.validate_format(path=path, supported_formats=SUPPORTED_TABLE_FILE_FORMATS)
         self.create_dir(path=path)
@@ -706,6 +868,7 @@ class TableFileUtils(BaseFileUtils):
         file_suffix = path.suffix.lower()
 
         def checked_batches() -> Iterator[pl.DataFrame]:
+            """Yield the first batch and validate each subsequent batch's type and schema."""
             yield first_batch
             for batch in iterator:
                 if not isinstance(batch, pl.DataFrame):
@@ -784,16 +947,18 @@ class TableFileUtils(BaseFileUtils):
         columns: List[str],
     ) -> List[str]:
         """
-        Checks if certain columns in the DataFrame are present.
+        Return requested column names that are absent from a DataFrame.
 
         Args:
-            df (pl.DataFrame): The DataFrame in which th provided \
-                columns are to be checked.
-            columns (List[str]): The list of column names to find in the \
-                provided DataFrame.
+            df (pl.DataFrame): Table whose column names are inspected.
+            columns (List[str]): Required names, compared using exact equality.
 
         Returns:
-            List[str]: The list of column names not in the provided DataFrame.
+            List[str]: Missing names in input order, including repeated missing
+                names. An empty list means every requested name is present.
+
+        Notes:
+            This checks name presence only, not column order or data types.
         """
         all_columns = df.columns
         # Below is an empty list if all column names exist in all_columns
@@ -808,15 +973,22 @@ class TableFileUtils(BaseFileUtils):
         new_rows: Union[List[Dict], pl.DataFrame],
     ) -> pl.DataFrame:
         """
-        Appends new rows to an existing Polars DataFrame.
+        Return a DataFrame containing the original rows followed by new rows.
 
         Args:
-            df (pl.DataFrame): The DataFrame to concatenate new rows to.
-            new_rows (Union[List[Dict], pl.DataFrame]): New data needed to be \
-                concatenated to the DataFrame.
+            df (pl.DataFrame): Table whose schema defines the expected columns.
+            new_rows (List[Dict] | pl.DataFrame): Rows to append. Dictionaries
+                are converted with df.schema; a DataFrame is concatenated as
+                provided and must have a compatible schema.
 
         Returns:
-            pl.DataFrame: Concatenated DataFrame with both old and new rows.
+            pl.DataFrame: Vertically concatenated table. The input DataFrame is
+                not modified.
+
+        Notes:
+            Dictionary conversion uses the supplied schema: omitted fields may
+            become null and fields outside that schema are not retained. Schema
+            and value-conversion errors propagate from Polars.
         """
         if isinstance(new_rows, list):
             # Convert from List[Dict] to pl.DataFrame

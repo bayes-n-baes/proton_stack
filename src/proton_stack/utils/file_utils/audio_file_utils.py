@@ -40,6 +40,14 @@ class AudioFileUtils(BaseFileUtils):
         raise NotImplementedError
     
     @override
+    def supported_backends(
+        self,
+        *args,
+        **kwargs,
+    ) -> Any:
+        raise NotImplementedError
+    
+    @override
     def supported_formats(
         self,
         *args,
