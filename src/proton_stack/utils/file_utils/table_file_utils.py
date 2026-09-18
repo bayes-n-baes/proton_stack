@@ -1,6 +1,5 @@
 """
 Read, write, inspect, and convert tabular data with Polars and DuckDB.
-
 File extensions select the reader or writer. PyArrow provides ORC and
 incremental columnar writers. Supported formats and backend labels are
 defined in the sibling constants module.
@@ -17,7 +16,7 @@ from typing_extensions import override
 from typing import Any, Dict, Iterable, Iterator, List, Union
 
 from .base_file_utils import BaseFileUtils
-from .constants import SUPPORTED_TABLE_BACKENDS, SUPPORTED_TABLE_FILE_FORMATS
+from .constants import _SUPPORTED_TABLE_BACKENDS, _SUPPORTED_TABLE_FILE_FORMATS
 
 
 class TableFileUtils(BaseFileUtils):
@@ -231,7 +230,7 @@ class TableFileUtils(BaseFileUtils):
         Returns:
             List[str]: The shared SUPPORTED_TABLE_BACKENDS list, not a copy.
         """
-        return SUPPORTED_TABLE_BACKENDS
+        return _SUPPORTED_TABLE_BACKENDS
         
     @override
     def supported_formats(
@@ -244,7 +243,7 @@ class TableFileUtils(BaseFileUtils):
             List[str]: The shared SUPPORTED_TABLE_FILE_FORMATS list of lowercase
                 suffixes with leading dots, not a copy.
         """
-        return SUPPORTED_TABLE_FILE_FORMATS
+        return _SUPPORTED_TABLE_FILE_FORMATS
 
     @override
     def read_metadata(
@@ -537,10 +536,10 @@ class TableFileUtils(BaseFileUtils):
             dependencies used by the Polars Excel reader.
         """
         file_format = f".{file_format.lower().lstrip('.')}"
-        if file_format not in SUPPORTED_TABLE_FILE_FORMATS:
+        if file_format not in _SUPPORTED_TABLE_FILE_FORMATS:
             raise RuntimeError(
                 f"File format: {file_format} is not supported. Supported "
-                f"file formats include: {SUPPORTED_TABLE_FILE_FORMATS}"
+                f"file formats include: {_SUPPORTED_TABLE_FILE_FORMATS}"
             )
         buffer = BytesIO(data)
 
@@ -603,10 +602,10 @@ class TableFileUtils(BaseFileUtils):
             produce IPC files.
         """
         file_format = f".{file_format.lower().lstrip('.')}"
-        if file_format not in SUPPORTED_TABLE_FILE_FORMATS:
+        if file_format not in _SUPPORTED_TABLE_FILE_FORMATS:
             raise RuntimeError(
                 f"File format: {file_format} is not supported. Supported "
-                f"file formats include: {SUPPORTED_TABLE_FILE_FORMATS}"
+                f"file formats include: {_SUPPORTED_TABLE_FILE_FORMATS}"
             )
         buffer = BytesIO()
 
@@ -705,7 +704,7 @@ class TableFileUtils(BaseFileUtils):
             or collection.
         """
         self.validate_file_path(path=path)
-        self.validate_format(path=path, supported_formats=SUPPORTED_TABLE_FILE_FORMATS)
+        self.validate_format(path=path, supported_formats=_SUPPORTED_TABLE_FILE_FORMATS)
         file_suffix = path.suffix.lower()
         
         if "parquet" in file_suffix:
@@ -849,7 +848,7 @@ class TableFileUtils(BaseFileUtils):
             a late failure can leave a partial destination file. Directory
             preparation is delegated to BaseFileUtils.create_dir.
         """
-        self.validate_format(path=path, supported_formats=SUPPORTED_TABLE_FILE_FORMATS)
+        self.validate_format(path=path, supported_formats=_SUPPORTED_TABLE_FILE_FORMATS)
         self.create_dir(path=path)
         iterator = iter(batches)
         try:
